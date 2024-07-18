@@ -17,3 +17,4 @@ from .gpu_affinity import Mode
 from .gpu_affinity import Multithreading
 from .gpu_affinity import Scope
 from .gpu_affinity import set_affinity
+from .gpu_affinity import affinity_map

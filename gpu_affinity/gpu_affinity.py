@@ -709,3 +709,55 @@ def set_affinity(
         raise GPUAffinityError(msg) from ex
 
     return new_affinity
+
+def affinity_map(
+    mode: Mode = Mode.UNIQUE_CONTIGUOUS,
+    scope: Scope = Scope.NODE,
+    multithreading: Multithreading = Multithreading.ALL_LOGICAL,
+    balanced: bool = True,
+    min_physical_cores: int = 1,
+    max_physical_cores: Optional[int] = None,
+):
+    r'''
+    Returns a list of CPU affinities for every device present on the system.
+    '''
+    assert 'CUDA_VISIBLE_DEVICES' in os.environ, "CUDA_VISIBLE_DEVICES environment variable not set"
+    # Computes the number of available devices on the system
+    visible_devices = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
+    ngpus = len(visible_devices)
+
+    try:
+        pynvml.nvmlInit()
+    except pynvml.NVMLError as ex:
+        msg = 'Error while initializing pynvml'
+        raise GPUAffinityError(msg) from ex
+
+    if mode == Mode.ALL:
+        affinity = get_all(
+            ngpus,
+            scope,
+            multithreading,
+            min_physical_cores,
+            max_physical_cores,
+        )
+    elif mode == Mode.SINGLE:
+        affinity = get_single(ngpus, scope, multithreading)
+    elif mode == Mode.SINGLE_UNIQUE:
+        affinity = get_single_unique(ngpus, scope, multithreading)
+    elif mode in {Mode.UNIQUE_CONTIGUOUS, Mode.UNIQUE_INTERLEAVED}:
+        affinity = get_unique(
+            ngpus,
+            scope,
+            multithreading,
+            mode,
+            min_physical_cores,
+            max_physical_cores,
+            balanced,
+        )
+    else:
+        raise GPUAffinityError('Unknown affinity mode')
+
+    return affinity
+
+
+    
