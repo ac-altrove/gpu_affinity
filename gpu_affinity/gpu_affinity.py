@@ -23,6 +23,7 @@ import re
 from typing import Optional
 
 import pynvml
+import warnings
 
 
 class GPUAffinityError(Exception):
@@ -116,7 +117,7 @@ class Device:
     def get_uuid(self):
         return pynvml.nvmlDeviceGetUUID(self.handle)
 
-    def get_cpu_affinity(self, scope):
+    def get_cpu_affinity(self, scope, exclude_cpu_core_0: bool = False, exclude_cpu_core_1: bool = False,):
         if scope == Scope.SOCKET:
             nvml_scope = pynvml.NVML_AFFINITY_SCOPE_SOCKET
         elif scope == Scope.NODE:
@@ -133,8 +134,12 @@ class Device:
 
         affinity_list = [int(x) for x in affinity_string]
         affinity_list.reverse()  # so core 0 is in 0th element of list
-
-        ret = [i for i, e in enumerate(affinity_list) if e != 0]
+        if exclude_cpu_core_0 and (not exclude_cpu_core_1):
+            ret = [i for i, e in enumerate(affinity_list) if e != 0]
+        elif exclude_cpu_core_0 and exclude_cpu_core_1:
+            ret = [i for i, e in enumerate(affinity_list) if (e != 0) or (e != 1)]
+        else:
+            ret = [i for i, e in enumerate(affinity_list)]
         return ret
 
 
@@ -297,28 +302,29 @@ def check_affinities(affinities):
             )
 
 
-def get_affinities(nproc_per_node, scope, exclude_unavailable_cores=True):
+def get_affinities(nproc_per_node, scope, exclude_unavailable_cores=True, exclude_cpu_core_0: bool = False, exclude_cpu_core_1: bool = False):
     devices = [Device(i) for i in range(nproc_per_node)]
-    affinities = [dev.get_cpu_affinity(scope) for dev in devices]
+    affinities = [dev.get_cpu_affinity(scope, exclude_cpu_core_0, exclude_cpu_core_1) for dev in devices]
 
     if exclude_unavailable_cores:
         available_cores = os.sched_getaffinity(0)
-        affinities = [
+        affinities_ = [
             sorted(list(set(affinity) & available_cores))
             for affinity in affinities
         ]
+        if affinities_ != affinities:
+            warnings.warn('Warning: CPU cores listed in the affinity map are different from the list of available cores')
+    check_affinities(affinities_)
 
-    check_affinities(affinities)
-
-    return affinities
+    return affinities_
 
 
-def get_grouped_affinities(nproc_per_node, exclude_unavailable_cores=True):
+def get_grouped_affinities(nproc_per_node, exclude_unavailable_cores=True, exclude_cpu_core_0: bool = False, exclude_cpu_core_1: bool = False,):
     socket_affinities = get_affinities(
-        nproc_per_node, Scope.SOCKET, exclude_unavailable_cores
+        nproc_per_node, Scope.SOCKET, exclude_unavailable_cores, exclude_cpu_core_0, exclude_cpu_core_1
     )
     node_affinities = get_affinities(
-        nproc_per_node, Scope.NODE, exclude_unavailable_cores
+        nproc_per_node, Scope.NODE, exclude_unavailable_cores, exclude_cpu_core_0, exclude_cpu_core_1
     )
 
     sibling_socket_affinities = group_by_siblings(socket_affinities)
@@ -337,6 +343,8 @@ def get_all(
     multithreading,
     min_physical_cores,
     max_physical_cores,
+    exclude_cpu_core_0: bool = False,
+    exclude_cpu_core_1: bool = False,
 ):
     r'''
     The process is assigned with all available physical CPU cores recommended
@@ -350,7 +358,7 @@ def get_all(
         scope (Scope): scope for retrieving affinity from pynvml
         multithreading (Multithreading): multithreading mode
     '''
-    affinities = get_affinities(nproc_per_node, scope)
+    affinities = get_affinities(nproc_per_node, scope, exclude_cpu_core_0, exclude_cpu_core_1)
 
     affinities = group_by_siblings(affinities)
 
@@ -385,6 +393,8 @@ def get_single(
     multithreading,
     min_physical_cores=1,
     max_physical_cores=1,
+    exclude_cpu_core_0: bool = False,
+    exclude_cpu_core_1: bool = False,
 ):
     r'''
     The process is assigned with the first available physical CPU core from the
@@ -399,7 +409,7 @@ def get_single(
         scope (Scope): scope for retrieving affinity from pynvml
         multithreading (Multithreading): multithreading mode
     '''
-    grouped_affinities = get_grouped_affinities(nproc_per_node)
+    grouped_affinities = get_grouped_affinities(nproc_per_node, exclude_cpu_core_0, exclude_cpu_core_1)
     ungrouped_affinities = ungroup_all_and_check_count(
         grouped_affinities,
         scope,
@@ -416,6 +426,8 @@ def get_single_unique(
     multithreading,
     min_physical_cores=1,
     max_physical_cores=1,
+    exclude_cpu_core_0: bool = False,
+    exclude_cpu_core_1: bool = False,
 ):
     r'''
     The process is assigned with a single unique available physical CPU core
@@ -430,7 +442,7 @@ def get_single_unique(
         scope (Scope): scope for retrieving affinity from pynvml
         multithreading (Multithreading): multithreading mode
     '''
-    grouped_affinities = get_grouped_affinities(nproc_per_node)
+    grouped_affinities = get_grouped_affinities(nproc_per_node, exclude_cpu_core_0, exclude_cpu_core_1)
 
     affinities = []
     assigned_groups = set()
@@ -461,6 +473,8 @@ def get_unique(
     min_physical_cores: int,
     max_physical_cores: int,
     balanced: bool = True,
+    exclude_cpu_core_0: bool = False,
+    exclude_cpu_core_1: bool = False,
 ):
     r'''
     The process is assigned with a unique subset of available physical CPU
@@ -478,7 +492,7 @@ def get_unique(
         balanced (bool): assign an equal number of physical cores to each
             process
     '''
-    grouped_affinities = get_grouped_affinities(nproc_per_node)
+    grouped_affinities = get_grouped_affinities(nproc_per_node, exclude_cpu_core_0, exclude_cpu_core_1)
 
     grouped_affinities_to_device_ids = collections.defaultdict(list)
 
@@ -536,6 +550,11 @@ def get_unique(
     )
     return ungrouped_affinities
 
+def is_core_0_logical():
+# Check if core 0 is a logical core
+    thread_sibling_list = get_thread_siblings_list()
+    thread_sibling_dict = build_thread_siblings_dict(thread_sibling_list)
+    return True if 0 in thread_sibling_dict else False
 
 def set_affinity(
     gpu_id: int,
@@ -547,6 +566,8 @@ def set_affinity(
     balanced: bool = True,
     min_physical_cores: int = 1,
     max_physical_cores: Optional[int] = None,
+    exclude_cpu_core_0: bool = False,
+    exclude_cpu_core_1_if_0_is_logical: bool = False,
 ):
     r'''
     The process is assigned with a proper CPU affinity that matches CPU-GPU
@@ -666,6 +687,10 @@ def set_affinity(
             f'nproc_per_node={nproc_per_node}'
         )
         raise GPUAffinityError(msg)
+    
+    assert (not exclude_cpu_core_0) and  exclude_cpu_core_1_if_0_is_logical, "exclude_cpu_core_0 can't be False if exclude_cpu_core_1_if_0_is_logical is True"
+    if exclude_cpu_core_1_if_0_is_logical and (not is_core_0_logical()):
+        exclude_cpu_core_1 = False
 
     try:
         pynvml.nvmlInit()
@@ -680,11 +705,13 @@ def set_affinity(
             multithreading,
             min_physical_cores,
             max_physical_cores,
+            exclude_cpu_core_0,
+            exclude_cpu_core_1,
         )
     elif mode == Mode.SINGLE:
-        affinity = get_single(nproc_per_node, scope, multithreading)
+        affinity = get_single(nproc_per_node, scope, multithreading, exclude_cpu_core_0, exclude_cpu_core_1)
     elif mode == Mode.SINGLE_UNIQUE:
-        affinity = get_single_unique(nproc_per_node, scope, multithreading)
+        affinity = get_single_unique(nproc_per_node, scope, multithreading, exclude_cpu_core_0, exclude_cpu_core_1)
     elif mode in {Mode.UNIQUE_CONTIGUOUS, Mode.UNIQUE_INTERLEAVED}:
         affinity = get_unique(
             nproc_per_node,
@@ -694,6 +721,8 @@ def set_affinity(
             min_physical_cores,
             max_physical_cores,
             balanced,
+            exclude_cpu_core_0,
+            exclude_cpu_core_1,
         )
     else:
         raise GPUAffinityError('Unknown affinity mode')
@@ -717,14 +746,23 @@ def affinity_map(
     balanced: bool = True,
     min_physical_cores: int = 1,
     max_physical_cores: Optional[int] = None,
+    exclude_cpu_core_0: bool = False,
+    exclude_cpu_core_1_if_0_is_logical: bool = False,
 ):
     r'''
     Returns a list of CPU affinities for every device present on the system.
     '''
     assert 'CUDA_VISIBLE_DEVICES' in os.environ, "CUDA_VISIBLE_DEVICES environment variable not set"
-    # Computes the number of available devices on the system
+    # Find the list of available GPU devices on the system
     visible_devices = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
+    # interpret elements of CUDA_VISIBLE_DEVICES as integer indices
+    visible_devices = [int(id) for id in visible_devices]
+    # Get the number of devices
     ngpus = len(visible_devices)
+    
+    assert (not exclude_cpu_core_0) and  exclude_cpu_core_1_if_0_is_logical, "exclude_cpu_core_0 can't be False if exclude_cpu_core_1_if_0_is_logical is True"
+    if exclude_cpu_core_1_if_0_is_logical and (not is_core_0_logical()):
+        exclude_cpu_core_1 = False
 
     try:
         pynvml.nvmlInit()
@@ -739,11 +777,13 @@ def affinity_map(
             multithreading,
             min_physical_cores,
             max_physical_cores,
+            exclude_cpu_core_0,
+            exclude_cpu_core_1, 
         )
     elif mode == Mode.SINGLE:
-        affinity = get_single(ngpus, scope, multithreading)
+        affinity = get_single(ngpus, scope, multithreading, exclude_cpu_core_0, exclude_cpu_core_1)
     elif mode == Mode.SINGLE_UNIQUE:
-        affinity = get_single_unique(ngpus, scope, multithreading)
+        affinity = get_single_unique(ngpus, scope, multithreading, exclude_cpu_core_0, exclude_cpu_core_1)
     elif mode in {Mode.UNIQUE_CONTIGUOUS, Mode.UNIQUE_INTERLEAVED}:
         affinity = get_unique(
             ngpus,
@@ -753,11 +793,13 @@ def affinity_map(
             min_physical_cores,
             max_physical_cores,
             balanced,
+            exclude_cpu_core_0,
+            exclude_cpu_core_1,
         )
     else:
         raise GPUAffinityError('Unknown affinity mode')
 
-    return affinity
+    return visible_devices, affinity
 
 
     
