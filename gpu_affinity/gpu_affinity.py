@@ -314,6 +314,8 @@ def get_affinities(nproc_per_node, scope, exclude_unavailable_cores=True, exclud
         ]
         if affinities_ != affinities:
             warnings.warn('Warning: CPU cores listed in the affinity map are different from the list of available cores')
+            print(f'Available cores: {affinities}')
+            print(f'Affinity map {affinities_}')
     check_affinities(affinities_)
 
     return affinities_
