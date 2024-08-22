@@ -761,6 +761,8 @@ def affinity_map(
     visible_devices = [int(id) for id in visible_devices]
     # Get the number of devices
     ngpus = len(visible_devices)
+    print("ngpus: ", ngpus)
+    
     
     assert not ((not exclude_cpu_core_0) and  exclude_cpu_core_1_if_0_is_logical), "exclude_cpu_core_0 can't be False if exclude_cpu_core_1_if_0_is_logical is True"
     if is_core_0_logical():
