@@ -761,8 +761,11 @@ def affinity_map(
     ngpus = len(visible_devices)
     
     assert not ((not exclude_cpu_core_0) and  exclude_cpu_core_1_if_0_is_logical), "exclude_cpu_core_0 can't be False if exclude_cpu_core_1_if_0_is_logical is True"
-    if exclude_cpu_core_1_if_0_is_logical and (not is_core_0_logical()):
+    if is_core_0_logical():
+        exclude_cpu_core_1 = exclude_cpu_core_1_if_0_is_logical
+    else:
         exclude_cpu_core_1 = False
+
 
     try:
         pynvml.nvmlInit()
